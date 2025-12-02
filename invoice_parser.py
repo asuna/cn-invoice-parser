@@ -11,38 +11,50 @@ def extract_invoice_data(file_path):
     """
     try:
         with pdfplumber.open(file_path) as pdf:
-            # We assume single page for standard invoices
-            page = pdf.pages[0]
-            text = page.extract_text()
+            # Standard invoices usually have Date and Seller on the first page
+            first_page = pdf.pages[0]
+            first_page_text = first_page.extract_text()
             
-            if not text:
+            if not first_page_text:
                 return None, None, None
 
-            # 1. Extract Date
+            # 1. Extract Date (from first page)
             # Pattern: matches "开票日期" with potential duplicates/spaces
-            date_match = re.search(r'[开\s]+[票\s]+[日\s]+[期\s]+[:：]*\s*(\d{4}年\d{2}月\d{2}日)', text)
+            date_match = re.search(r'[开\s]+[票\s]+[日\s]+[期\s]+[:：]*\s*(\d{4}年\d{2}月\d{2}日)', first_page_text)
             invoice_date = date_match.group(1) if date_match else None
 
             # 2. Extract Amount
             # User requested "价税合计小写数值" (Total Price & Tax Lowercase Value)
-            # Priority 1: Look for "价税合计" followed by "小写" and the number
-            amount_match = re.search(r'[价\s]+[税\s]+[合\s]+[计\s]+.*?([小\s]+[写\s]+).*?[¥￥]?\s*([\d\.]+)', text, re.DOTALL)
+            # In multi-page invoices, "价税合计" might be on the last page.
+            # We iterate through all pages to find the Grand Total.
             
-            if not amount_match:
-                # Priority 2: Look for "小写" followed by currency symbol (Legacy/Fallback)
-                amount_match = re.search(r'[小\s]+[写\s]+.*?[¥￥]\s*([\d\.]+)', text)
+            amount = None
             
-            if not amount_match:
-                 # Priority 3: Fallback looking for just the number after 小写
-                 amount_match = re.search(r'[小\s]+[写\s]+.*?\s*([\d\.]+)', text)
+            # Priority 1: Look for "价税合计" followed by "小写" and the number across ALL pages
+            for page in pdf.pages:
+                page_text = page.extract_text()
+                if not page_text:
+                    continue
+                    
+                # Look for "价税合计" ... "小写" ... Number
+                amount_match = re.search(r'[价\s]+[税\s]+[合\s]+[计\s]+.*?([小\s]+[写\s]+).*?[¥￥]?\s*([\d\.]+)', page_text, re.DOTALL)
+                if amount_match:
+                    amount = amount_match.group(amount_match.lastindex)
+                    break # Found the grand total, stop searching
             
-            # If match found, the amount is in the last group (group 2 for Priority 1, group 1 for others)
-            if amount_match:
-                amount = amount_match.group(amount_match.lastindex)
-            else:
-                amount = None
+            # Priority 2: If not found, look for "小写" followed by currency symbol on FIRST page (Legacy/Fallback)
+            if not amount:
+                amount_match = re.search(r'[小\s]+[写\s]+.*?[¥￥]\s*([\d\.]+)', first_page_text)
+                if amount_match:
+                    amount = amount_match.group(1)
+            
+            # Priority 3: Fallback looking for just the number after 小写 on FIRST page
+            if not amount:
+                 amount_match = re.search(r'[小\s]+[写\s]+.*?\s*([\d\.]+)', first_page_text)
+                 if amount_match:
+                    amount = amount_match.group(1)
 
-            # 3. Extract Seller Name
+            # 3. Extract Seller Name (from first page)
             # Strategy: Find all occurrences of "名称". The last one is usually the Seller.
             # We also handle potential spaces in "名 称" and duplicates "名名称称".
             
@@ -51,7 +63,7 @@ def extract_invoice_data(file_path):
             # Pattern: matches "名称" with potential duplicates/spaces
             # Note: Use [:：]* to handle multiple colons (e.g. ：：：) which might otherwise cause
             # the greedy name matching to backtrack and capture part of the key.
-            matches = re.findall(r'[名\s]+[称\s]+[:：]*\s*([\u4e00-\u9fa5A-Za-z0-9\(\)（）]+)', text)
+            matches = re.findall(r'[名\s]+[称\s]+[:：]*\s*([\u4e00-\u9fa5A-Za-z0-9\(\)（）]+)', first_page_text)
             
             if matches:
                 # Filter matches to find the most likely Seller Name
