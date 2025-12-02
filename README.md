@@ -83,6 +83,26 @@ By default, it reads PDF files from the `invoices` directory and outputs to the 
 python invoice_parser.py
 ```
 
+#### AI Summary Renaming (New!)
+
+You can use an OpenAI-compatible API to generate a short summary of the invoice content and use it in the filename instead of the seller name.
+
+```bash
+python invoice_parser.py --api-key <YOUR_API_KEY> --base-url <API_BASE_URL> --model <MODEL_NAME>
+```
+
+**AI Arguments:**
+- `--api-key`: Your OpenAI API Key (Required for AI features)
+- `--base-url`: API Base URL (default: `https://api.openai.com/v1`)
+- `--model`: Model to use (default: `gpt-3.5-turbo`)
+- `--temperature`: Sampling temperature (default: `0.3`). Higher values (e.g., 0.7) make output more random; lower values (e.g., 0.1) make it more deterministic.
+
+**Example:**
+```bash
+python invoice_parser.py --api-key sk-xxxx --base-url https://api.deepseek.com/v1 --model deepseek-chat
+```
+Output: `2024.09.09-OfficeSupplies-33.58.pdf`
+
 #### Advanced Usage
 
 You can specify input/output directories and enable verbose logging:
