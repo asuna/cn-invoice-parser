@@ -135,7 +135,14 @@ def main():
         
         if date and seller and amount:
             # Format: Date-Seller-Amount.pdf
-            new_filename = f"{date}-{seller}-{amount}.pdf"
+            # User requested "YYYY.MM.DD" format for date.
+            # Original date format extracted is usually "YYYY年MM月DD日"
+            formatted_date = date
+            date_match = re.match(r'(\d{4})年(\d{2})月(\d{2})日', date)
+            if date_match:
+                formatted_date = f"{date_match.group(1)}.{date_match.group(2)}.{date_match.group(3)}"
+            
+            new_filename = f"{formatted_date}-{seller}-{amount}.pdf"
             # Sanitize filename just in case (remove illegal chars for windows)
             new_filename = re.sub(r'[<>:"/\\|?*]', '', new_filename)
             
