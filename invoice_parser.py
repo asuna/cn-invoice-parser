@@ -1,14 +1,12 @@
 import pdfplumber
 import re
-import pdfplumber
-import re
 import os
 import shutil
 import argparse
 from pathlib import Path
 from openai import OpenAI
 
-def get_invoice_summary(text, api_key, base_url, model, temperature):
+def get_invoice_summary(text, api_key, base_url, model, temperature, debug=False):
     """
     Uses OpenAI API to summarize the invoice content into a short product description.
     """
@@ -23,7 +21,7 @@ def get_invoice_summary(text, api_key, base_url, model, temperature):
         client = OpenAI(api_key=api_key, base_url=base_url)
         
         prompt = f"""
-        Please analyze the following invoice text and extract a very short summary of the main goods or services purchased.
+        Please analyze the following invoice text (extracted with layout preservation) and extract a very short summary of the main goods or services purchased.
         
         Rules:
         1. Ignore tax categories enclosed in asterisks (e.g., ignore "*电线电缆*", "*餐饮服务*").
@@ -32,15 +30,31 @@ def get_invoice_summary(text, api_key, base_url, model, temperature):
         4. Use Chinese if the invoice is Chinese.
         5. Max length: 15 characters.
         6. **RETURN ONLY THE SUMMARY TEXT. DO NOT INCLUDE "Output:" OR QUOTES.**
+        7. **Look at the item rows and Quantity (数量) column.**
+        8. If the invoice contains multiple distinct item rows (different products), append "等等" to the end.
+        9. If it is a single item row (even if Quantity > 1), DO NOT append "等等".
         
         Example: 
-        Input: "*电线电缆*山泽Lightning转Type-C转接头..." -> "山泽转接头"
-        Input: "*餐饮服务*客饭" -> "餐饮客饭"
+        Input: 
+        名称       数量
+        *电线*转接头  1
+        *电线*数据线  1
+        -> "转接头等等"
+        
+        Input:
+        名称       数量
+        *餐饮*客饭    5
+        -> "餐饮客饭"
+        
+        Input: "*预付卡销售*京东E卡 1张" -> "京东E卡"
         
         Invoice Text:
-        {text[:2500]}
+        {text[:3000]}
         """
         
+        if debug:
+            print(f"\n[DEBUG] AI Prompt:\n{prompt}\n[DEBUG] End Prompt")
+
         response = client.chat.completions.create(
             model=model,
             messages=[
@@ -51,6 +65,9 @@ def get_invoice_summary(text, api_key, base_url, model, temperature):
             temperature=temperature
         )
         
+        if debug:
+             print(f"[DEBUG] AI Response Object:\n{response}\n[DEBUG] End Response")
+
         if not hasattr(response, 'choices'):
              print(f"  -> AI Error: Unexpected response format. Response: {response}")
              return None
@@ -74,7 +91,7 @@ def get_invoice_summary(text, api_key, base_url, model, temperature):
 def extract_invoice_data(file_path):
     """
     Extracts Date, Seller Name, and Total Amount from a PDF invoice.
-    Returns: date, seller, amount, full_text
+    Returns: date, seller, amount, full_text_layout
     """
     try:
         with pdfplumber.open(file_path) as pdf:
@@ -82,12 +99,17 @@ def extract_invoice_data(file_path):
             first_page = pdf.pages[0]
             first_page_text = first_page.extract_text()
             
-            # Get full text for AI summary
-            full_text = ""
+            # Get full text for regex (raw) and AI (layout)
+            full_text_raw = ""
+            full_text_layout = ""
+            
             for page in pdf.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    full_text += page_text + "\n"
+                raw = page.extract_text()
+                layout = page.extract_text(layout=True)
+                if raw:
+                    full_text_raw += raw + "\n"
+                if layout:
+                    full_text_layout += layout + "\n"
             
             if not first_page_text:
                 return None, None, None, None
@@ -105,7 +127,7 @@ def extract_invoice_data(file_path):
             amount = None
             
             # Priority 1: Look for "价税合计" ... "小写" ... Number
-            amount_match = re.search(r'[价\s]+[税\s]+[合\s]+[计\s]+.*?([小\s]+[写\s]+).*?[¥￥]?\s*([\d\.]+)', full_text, re.DOTALL)
+            amount_match = re.search(r'[价\s]+[税\s]+[合\s]+[计\s]+.*?([小\s]+[写\s]+).*?[¥￥]?\s*([\d\.]+)', full_text_raw, re.DOTALL)
             if amount_match:
                 amount = amount_match.group(amount_match.lastindex)
             
@@ -168,7 +190,7 @@ def extract_invoice_data(file_path):
                         if name_match:
                             seller = name_match.group(1)
 
-            return invoice_date, seller, amount, full_text
+            return invoice_date, seller, amount, full_text_layout
 
     except Exception as e:
         print(f"Error processing {file_path}: {e}")
@@ -200,7 +222,8 @@ def extract_items_section(text):
     # 2. Find Footer Line (after start)
     if start_index != -1:
         for i in range(start_index + 1, len(lines)):
-            if "合计" in lines[i] or "价税合计" in lines[i]:
+            # Match "合计" or "价税合计" with optional spaces
+            if re.search(r'(合\s*计|价\s*税\s*合\s*计)', lines[i]):
                 end_index = i
                 break
     
@@ -219,6 +242,7 @@ def main():
     parser.add_argument('--input', default='invoices', help='Input directory containing PDF invoices')
     parser.add_argument('--output', default='output', help='Output directory for renamed files')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose output')
+    parser.add_argument('--debug', action='store_true', help='Enable debug output (full AI prompt/response)')
     
     # AI Arguments
     parser.add_argument('--api-key', help='OpenAI API Key')
@@ -259,7 +283,7 @@ def main():
                 if args.verbose:
                     print(f"     (Sending {len(items_text)} chars to AI instead of {len(full_text)})")
                 
-                summary = get_invoice_summary(items_text, args.api_key, args.base_url, args.model, args.temperature)
+                summary = get_invoice_summary(items_text, args.api_key, args.base_url, args.model, args.temperature, args.debug)
                 if summary:
                     middle_part = summary
                     if args.verbose:
